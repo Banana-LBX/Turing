@@ -95,57 +95,94 @@ Node* move_left(Node *head) {
     return head->left;
 }
 
-void print_tape(Node *tape_head) {
-    Node *left_bound = tape_head;
+void print_tape(Node *tape_head, Rule rule) {
+    Node *left = tape_head;
+    Node *right = tape_head;
 
-    // go left 20 cells
-    for (int i = 0; i < 20; i++) {
-        if (left_bound->left == NULL) break;
-        left_bound = left_bound->left;
+    // go far left
+    while (left->left) left = left->left;
+
+    // go far right
+    while (right->right) right = right->right;
+
+    // find first non-blank from left
+    while (left && left->value == BLANK && left != tape_head) {
+        left = left->right;
     }
 
-    // print forward
-    Node *tmp = left_bound;
+    // find first non-blank from right
+    while (right && right->value == BLANK && right != tape_head) {
+        right = right->left;
+    }
 
-    for (int i = 0; i < 40; i++) {
-        if (!tmp) break;
+    // optional padding
+    int padding = 3;
+
+    for (int i = 0; i < padding; i++) {
+        if (left->left) left = left->left;
+        if (right->right) right = right->right;
+    }
+
+    // print tape
+    Node *tmp = left;
+    while (tmp) {
         printf("%c ", cell_to_char(tmp->value));
+        if (tmp == right) break;
         tmp = tmp->right;
     }
-
     printf("\n");
 
-    // head marker (re-scan)
-    tmp = left_bound;
-
-    for (int i = 0; i < 40; i++) {
-        if (!tmp) break;
-
+    // print head
+    tmp = left;
+    while (tmp) {
         if (tmp == tape_head)
-            printf("^ ");
+            printf("^(q%d)", rule.state);
         else
             printf("  ");
 
+        if (tmp == right) break;
         tmp = tmp->right;
     }
-
     printf("\n");
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        printf("Usage: %s <tape> <rules>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [flags] <tape> <rules>\n", argv[0]);
         return 1;
     }
 
+    bool animate = false;
+    int delay = 0;
+
+    int arg_index = 1;
+
+    // Check for flag
+    if (argc > 1 && (strcmp(argv[arg_index], "--animate") == 0 || strcmp(argv[arg_index], "-a") == 0)) {
+        animate = true;
+
+        if (argc <= arg_index + 1) {
+            fprintf(stderr, "Missing delay value\n");
+            return 1;
+        }
+
+        delay = 1000000 * atof(argv[arg_index + 1]);
+        arg_index += 2;
+    }
+
     // Read files
-    FILE *tape_ptr = fopen(argv[1], "r");
+    if (argc < arg_index + 2) {
+        fprintf(stderr, "Usage: %s [flags] <tape> <rules>\n", argv[0]);
+        return 1;
+    }
+
+    FILE *tape_ptr = fopen(argv[arg_index], "r");
+    FILE *rules_ptr = fopen(argv[arg_index + 1], "r");
+
     if (tape_ptr == NULL) {
         perror("Error opening file");
         return 1;
     }
-
-    FILE *rules_ptr = fopen(argv[2], "r");
     if (rules_ptr == NULL) {
         perror("Error opening file");
         return 1;
@@ -157,8 +194,25 @@ int main(int argc, char *argv[]) {
     while (rule_count < MAX_RULES &&
         fgets(rules_str[rule_count], RULE_LENGTH, rules_ptr) != NULL) {
 
-        rules_str[rule_count][strcspn(rules_str[rule_count], "\n")] = '\0'; // remove newline
-        strip_spaces(rules_str[rule_count]);
+        // remove newline
+        rules_str[rule_count][strcspn(rules_str[rule_count], "\n")] = '\0';
+
+        // trim leading whitespace
+        char *line = rules_str[rule_count];
+        while (isspace((unsigned char)*line)) line++;
+
+        // skip comments and blank lines
+        char *comment = strchr(line, '#');
+        if (comment) *comment = '\0';
+        if (*line == '\0' || *line == '#') continue;
+
+        // remove spaces inside rule
+        strip_spaces(line);
+
+        // move cleaned line back if skipped leading spaces
+        if (line != rules_str[rule_count]) {
+            memmove(rules_str[rule_count], line, strlen(line) + 1);
+        }
 
         rule_count++;
     }
@@ -166,8 +220,6 @@ int main(int argc, char *argv[]) {
     // Parse rules
     Rule rules[MAX_RULES];
     for (int i = 0; i < rule_count; ++i) {
-        if (is_blank(rules_str[i])) continue;
-
         int state;
         char move;
         char next_state_str[10];
@@ -263,12 +315,17 @@ int main(int argc, char *argv[]) {
     Node *tape_head = head_ptr;
     int current_state = 0;
 
-    print_tape(tape_head);
+    if (animate) {
+        print_tape(tape_head, rules[0]);
+        usleep(delay);
+    }
+
+    int i;
     while (1) {
         Cell current_cell = tape_head->value;
         bool found = false;
 
-        for (int i = 0; i < rule_count; i++) {
+        for (i = 0; i < rule_count; i++) {
             if (rules[i].state == current_state &&
                 rules[i].read == current_cell) {
 
@@ -285,9 +342,11 @@ int main(int argc, char *argv[]) {
                 // state transition
                 current_state = rules[i].next_state;
 
-                // print iteration
-                print_tape(tape_head);
-                usleep(1000000);
+                // animate
+                if (animate) {
+                    print_tape(tape_head, rules[i]);
+                    usleep(delay);
+                }
 
                 found = true;
                 break;
@@ -304,7 +363,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    print_tape(tape_head);
+    print_tape(tape_head, rules[i]);
 
     // Memory cleanup
     Node *cur = head;
