@@ -15,6 +15,12 @@ typedef enum {
     BLANK = 2
 } Cell;
 
+typedef struct Node {
+    Cell value;
+    struct Node *left;
+    struct Node *right;
+} Node;
+
 typedef struct {
     int state;
     Cell read;
@@ -22,6 +28,14 @@ typedef struct {
     int move; // L(-1), .(0), R(1)
     int next_state; // -1 for halt
 } Rule;
+
+int is_blank(const char *s) {
+    while (*s) {
+        if (!isspace((unsigned char)*s)) return 0;
+        s++;
+    }
+    return 1;
+}
 
 void strip_spaces(char* str) {
     char *read = str, *write = str;
@@ -49,24 +63,72 @@ char cell_to_char(Cell c) {
     return '_';
 }
 
-void print_tape(Cell *tape, int head_position, ssize_t nread, int capacity) {
-    int left = head_position - nread;
-    int right = head_position + nread;
-
-    if (left < 0) left = 0;
-    if (right >= capacity) right = capacity;
-
-    for (int i = left; i <= right; i++) {
-        printf("%c ", cell_to_char(tape[i]));
+Node* new_node() {
+    Node *n = malloc(sizeof(Node));
+    if (!n) {
+        perror("malloc failed");
+        exit(1);
     }
+    n->value = BLANK;
+    n->left = NULL;
+    n->right = NULL;
+    return n;
+}
+
+Node* move_right(Node *head) {
+    if (head->right == NULL) {
+        Node *n = new_node();
+        n->left = head;
+        head->right = n;
+        return n;
+    }
+    return head->right;
+}
+
+Node* move_left(Node *head) {
+    if (head->left == NULL) {
+        Node *n = new_node();
+        n->right = head;
+        head->left = n;
+        return n;
+    }
+    return head->left;
+}
+
+void print_tape(Node *tape_head) {
+    Node *left_bound = tape_head;
+
+    // go left 20 cells
+    for (int i = 0; i < 20; i++) {
+        if (left_bound->left == NULL) break;
+        left_bound = left_bound->left;
+    }
+
+    // print forward
+    Node *tmp = left_bound;
+
+    for (int i = 0; i < 40; i++) {
+        if (!tmp) break;
+        printf("%c ", cell_to_char(tmp->value));
+        tmp = tmp->right;
+    }
+
     printf("\n");
 
-    for (int i = left; i <= right; i++) {
-        if (i == head_position)
+    // head marker (re-scan)
+    tmp = left_bound;
+
+    for (int i = 0; i < 40; i++) {
+        if (!tmp) break;
+
+        if (tmp == tape_head)
             printf("^ ");
         else
             printf("  ");
+
+        tmp = tmp->right;
     }
+
     printf("\n");
 }
 
@@ -104,6 +166,8 @@ int main(int argc, char *argv[]) {
     // Parse rules
     Rule rules[MAX_RULES];
     for (int i = 0; i < rule_count; ++i) {
+        if (is_blank(rules_str[i])) continue;
+
         int state;
         char move;
         char next_state_str[10];
@@ -163,39 +227,32 @@ int main(int argc, char *argv[]) {
     }
     head_line[strcspn(head_line, "\n")] = '\0';
 
-    // Get head offset
-    int head_offset = -1;
+    // Initialize tape
+    Node *head = new_node();
+    Node *current = head;
 
-    for (int i = 0; i < strlen(head_line); i++) {
-        if (head_line[i] == '^') {
-            head_offset = i;
-            break;
+    for (int i = 0; i < strlen(tape_line); i++) {
+        current->value = parse_cell(tape_line[i]);
+
+        if (i < strlen(tape_line) - 1) {
+            Node *n = new_node();
+            current->right = n;
+            n->left = current;
+            current = n;
         }
     }
 
-    if (head_offset == -1) {
-        fprintf(stderr, "No ^ found in head line\n");
-        return 1;
+    // Head placement
+    Node *head_ptr = head;
+    int pos = 0;
+
+    for (int i = 0; i < strlen(head_line); i++) {
+        if (head_line[i] == '^') break;
+        pos++;
     }
 
-    // Initialize tape
-    int capacity = nread * 2;   // enough space
-    Cell *tape = malloc(capacity * sizeof(Cell));
-
-    if (!tape) {
-        perror("malloc failed");
-        return 1;
-    }
-
-    for (int i = 0; i < capacity; i++) {
-        tape[i] = BLANK;
-    }
-
-    // Parse tape
-    int start = capacity / 2;
-    int base = start - head_offset;
-    for (int i = 0; i < strlen(tape_line); i++) {
-        tape[base + i] = parse_cell(tape_line[i]);
+    for (int i = 0; i < pos; i++) {
+        head_ptr = move_right(head_ptr);
     }
 
     // Cleanup
@@ -203,47 +260,39 @@ int main(int argc, char *argv[]) {
     free(head_line);
 
     // Turing machine
-    int head_position = start;
+    Node *tape_head = head_ptr;
     int current_state = 0;
-    print_tape(tape, head_position, nread, capacity);
 
+    print_tape(tape_head);
     while (1) {
-        Cell current_cell = tape[head_position];
+        Cell current_cell = tape_head->value;
         bool found = false;
 
         for (int i = 0; i < rule_count; i++) {
             if (rules[i].state == current_state &&
                 rules[i].read == current_cell) {
 
-                tape[head_position] = rules[i].write;
-                head_position += rules[i].move;
+                // write
+                tape_head->value = rules[i].write;
 
-                // Expand tape if necessary
-                if (head_position >= capacity) {
-                    int old_capacity = capacity;
-                    capacity *= 2;
-
-                    tape = realloc(tape, capacity * sizeof(Cell));
-                    if (!tape) {
-                        perror("realloc failed");
-                        exit(1);
-                    }
-
-                    // initialize new cells
-                    for (int k = old_capacity; k < capacity; k++) {
-                        tape[k] = BLANK;
-                    }
+                // move
+                if (rules[i].move == -1) {
+                    tape_head = move_left(tape_head);
+                } else if (rules[i].move == 1) {
+                    tape_head = move_right(tape_head);
                 }
 
+                // state transition
                 current_state = rules[i].next_state;
+
+                // print iteration
+                print_tape(tape_head);
+                usleep(1000000);
 
                 found = true;
                 break;
             }
         }
-
-        print_tape(tape, head_position, nread, capacity);
-        usleep(1000000);
 
         if (!found) {
             fprintf(stderr, "No matching rule found\n");
@@ -251,11 +300,24 @@ int main(int argc, char *argv[]) {
         }
 
         if (current_state == -1) {
-            break; // halt
+            break;
         }
+    }
+
+    print_tape(tape_head);
+
+    // Memory cleanup
+    Node *cur = head;
+    while (cur->left) cur = cur->left; // go to far left
+
+    while (cur) {
+        Node *next = cur->right;
+        free(cur);
+        cur = next;
     }
 
     fclose(tape_ptr);
     fclose(rules_ptr);
+
     return 0;
 }

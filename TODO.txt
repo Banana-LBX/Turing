@@ -1,5 +1,4 @@
 allow empty lines in rules
-linked list tape
 add runtime flags:
     --print-tape # print from start of tape
     --print-head # print relative to head
