@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <unistd.h>
 
 #define MAX_TAPE 1000
 #define MAX_RULES 100
@@ -48,13 +49,34 @@ char cell_to_char(Cell c) {
     return '_';
 }
 
+void print_tape(Cell *tape, int head_position, ssize_t nread, int capacity) {
+    int left = head_position - nread;
+    int right = head_position + nread;
+
+    if (left < 0) left = 0;
+    if (right >= capacity) right = capacity;
+
+    for (int i = left; i <= right; i++) {
+        printf("%c ", cell_to_char(tape[i]));
+    }
+    printf("\n");
+
+    for (int i = left; i <= right; i++) {
+        if (i == head_position)
+            printf("^ ");
+        else
+            printf("  ");
+    }
+    printf("\n");
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: %s <tape> <rules>\n", argv[0]);
         return 1;
     }
 
-    // Read files into strings
+    // Read files
     FILE *tape_ptr = fopen(argv[1], "r");
     if (tape_ptr == NULL) {
         perror("Error opening file");
@@ -64,36 +86,6 @@ int main(int argc, char *argv[]) {
     FILE *rules_ptr = fopen(argv[2], "r");
     if (rules_ptr == NULL) {
         perror("Error opening file");
-        return 1;
-    }
-
-    // Get tape from file
-    char tape_str[MAX_TAPE];
-    char head_str[MAX_TAPE];
-
-    fgets(tape_str, sizeof(tape_str), tape_ptr);
-    fgets(head_str, sizeof(head_str), tape_ptr);
-
-    tape_str[strcspn(tape_str, "\n")] = '\0';
-    head_str[strcspn(head_str, "\n")] = '\0';
-
-    // Get index of the head
-    int head_offset = -1;
-
-    for (int i = 0; i < strlen(head_str); i++) {
-        if (head_str[i] == '^') {
-            head_offset = i;
-            break;
-        }
-    }
-
-    if (strlen(head_str) > strlen(tape_str)) {
-        fprintf(stderr, "Head line cannot exceed tape line\n");
-        return 1;
-    }
-
-    if (head_offset == -1) {
-        fprintf(stderr, "No ^ found in head line\n");
         return 1;
     }
 
@@ -107,34 +99,6 @@ int main(int argc, char *argv[]) {
         strip_spaces(rules_str[rule_count]);
 
         rule_count++;
-    }
-
-    // Convert input string to array fo cells
-    int tape_size = 100; // initial size
-    Cell *tape = malloc(tape_size * sizeof(Cell));
-
-    if (!tape) {
-        perror("malloc failed");
-        exit(1);
-    }
-
-    for (int i = 0; i < tape_size; i++) {
-        tape[i] = BLANK;
-    }
-
-    int start = MAX_TAPE / 2;
-    int base = start - head_offset;
-
-    for (int i = 0; i < strlen(tape_str); i++) {
-        int pos = base + i;
-
-        if (tape_str[i] == '0') tape[pos] = ZERO;
-        else if (tape_str[i] == '1') tape[pos] = ONE;
-        else if (tape_str[i] == '_') tape[pos] = BLANK;
-        else {
-            fprintf(stderr, "Invalid tape symbol\n");
-            return 1;
-        }
     }
 
     // Parse rules
@@ -178,9 +142,70 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    char *tape_line = NULL;
+    char *head_line = NULL;
+    size_t len = 0;
+
+    // Read tape line
+    ssize_t nread = getline(&tape_line, &len, tape_ptr);
+    if (nread == -1) {
+        perror("failed to read tape line");
+        return 1;
+    }
+    tape_line[strcspn(tape_line, "\n")] = '\0';
+
+    // Read head line
+    len = 0;
+    ssize_t hread = getline(&head_line, &len, tape_ptr);
+    if (hread == -1) {
+        perror("failed to read head line");
+        return 1;
+    }
+    head_line[strcspn(head_line, "\n")] = '\0';
+
+    // Get head offset
+    int head_offset = -1;
+
+    for (int i = 0; i < strlen(head_line); i++) {
+        if (head_line[i] == '^') {
+            head_offset = i;
+            break;
+        }
+    }
+
+    if (head_offset == -1) {
+        fprintf(stderr, "No ^ found in head line\n");
+        return 1;
+    }
+
+    // Initialize tape
+    int capacity = nread * 2;   // enough space
+    Cell *tape = malloc(capacity * sizeof(Cell));
+
+    if (!tape) {
+        perror("malloc failed");
+        return 1;
+    }
+
+    for (int i = 0; i < capacity; i++) {
+        tape[i] = BLANK;
+    }
+
+    // Parse tape
+    int start = capacity / 2;
+    int base = start - head_offset;
+    for (int i = 0; i < strlen(tape_line); i++) {
+        tape[base + i] = parse_cell(tape_line[i]);
+    }
+
+    // Cleanup
+    free(tape_line);
+    free(head_line);
+
     // Turing machine
     int head_position = start;
     int current_state = 0;
+    print_tape(tape, head_position, nread, capacity);
 
     while (1) {
         Cell current_cell = tape[head_position];
@@ -190,15 +215,35 @@ int main(int argc, char *argv[]) {
             if (rules[i].state == current_state &&
                 rules[i].read == current_cell) {
 
-                // Apply rule
                 tape[head_position] = rules[i].write;
                 head_position += rules[i].move;
+
+                // Expand tape if necessary
+                if (head_position >= capacity) {
+                    int old_capacity = capacity;
+                    capacity *= 2;
+
+                    tape = realloc(tape, capacity * sizeof(Cell));
+                    if (!tape) {
+                        perror("realloc failed");
+                        exit(1);
+                    }
+
+                    // initialize new cells
+                    for (int k = old_capacity; k < capacity; k++) {
+                        tape[k] = BLANK;
+                    }
+                }
+
                 current_state = rules[i].next_state;
 
                 found = true;
                 break;
             }
         }
+
+        print_tape(tape, head_position, nread, capacity);
+        usleep(1000000);
 
         if (!found) {
             fprintf(stderr, "No matching rule found\n");
@@ -209,26 +254,6 @@ int main(int argc, char *argv[]) {
             break; // halt
         }
     }
-
-    // Print result
-    int left = head_position - 10;
-    int right = head_position + 10;
-
-    if (left < 0) left = 0;
-    if (right >= MAX_TAPE) right = MAX_TAPE - 1;
-
-    for (int i = left; i <= right; i++) {
-        printf("%c ", cell_to_char(tape[i]));
-    }
-    printf("\n");
-
-    for (int i = left; i <= right; i++) {
-        if (i == head_position)
-            printf("^ ");
-        else
-            printf("  ");
-    }
-    printf("\n");
 
     fclose(tape_ptr);
     fclose(rules_ptr);

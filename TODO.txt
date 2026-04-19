@@ -1,1 +1,7 @@
-malloc tape (infinite tape)
+allow empty lines in rules
+linked list tape
+add runtime flags:
+    --print-tape # print from start of tape
+    --print-head # print relative to head
+    --animate-tape # show each step of proceess from start of tape
+    --animate-head # show each step of process relative to head
